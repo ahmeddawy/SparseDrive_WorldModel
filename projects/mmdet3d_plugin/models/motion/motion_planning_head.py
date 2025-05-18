@@ -6,6 +6,7 @@ import numpy as np
 import cv2
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from mmcv.utils import build_from_cfg
 from mmcv.cnn import Linear, bias_init_with_prob
@@ -139,6 +140,27 @@ class MotionPlanningHead(BaseModule):
 
         self.num_det = num_det
         self.num_map = num_map
+
+
+        # This is the Worl Model part added to the code
+        dino_features_dim = 768
+        self.action_aware_encoder = nn.Sequential(
+            nn.Linear(dino_features_dim + 12, dino_features_dim),
+            nn.ReLU(inplace=True), nn.Linear(dino_features_dim, dino_features_dim),
+            nn.ReLU(inplace=True), nn.Linear(dino_features_dim, dino_features_dim))
+        self.world_model_decoder = nn.TransformerDecoder(
+            nn.TransformerDecoderLayer(
+                d_model=dino_features_dim,
+                nhead=8,
+                dim_feedforward=1024,
+                dropout=0.1,
+                batch_first=True),
+            num_layers=2)
+        
+        self.prev_fused_feat = None
+        self.prev_visual_feat = None
+
+
 
     def init_weights(self):
         for i, op in enumerate(self.operation_order):
@@ -341,13 +363,26 @@ class MotionPlanningHead(BaseModule):
             "period": self.instance_queue.period,
             "anchor_queue": self.instance_queue.anchor_queue,
         }
-        planning_output = {
-            "classification": planning_classification,
-            "prediction": planning_prediction,
-            "status": planning_status,
-            "period": self.instance_queue.ego_period,
-            "anchor_queue": self.instance_queue.ego_anchor_queue,
-        }
+
+        if 'dino_features' in metas:
+            planning_output = {
+                "classification": planning_classification,
+                "prediction": planning_prediction,
+                "status": planning_status,
+                "period": self.instance_queue.ego_period,
+                "anchor_queue": self.instance_queue.ego_anchor_queue,
+                "dino_features": metas['dino_features']
+            }
+        else:
+            planning_output = {
+                "classification": planning_classification,
+                "prediction": planning_prediction,
+                "status": planning_status,
+                "period": self.instance_queue.ego_period,
+                "anchor_queue": self.instance_queue.ego_anchor_queue,
+            }
+
+
         return motion_output, planning_output
     
     def loss(self,
@@ -443,18 +478,45 @@ class MotionPlanningHead(BaseModule):
             reg_target = reg_target.flatten(end_dim=1)
             reg_weight = reg_weight.unsqueeze(-1)
 
-            reg_loss = self.plan_loss_reg(
-                reg_pred, reg_target, weight=reg_weight
-            )
-            status_loss = self.plan_loss_status(status.squeeze(1), data['ego_status'])
+            
+            #HERE we can extract the predicted waypoints
+            # Extract predicted waypoints
+            waypoints = reg_pred.clone().detach()
+            waypoints = waypoints.reshape(reg_pred.shape[0], reg_pred.shape[1] * reg_pred.shape[2])
+            visual_features = model_outs["dino_features"]
+            B, N, T_patches, D = visual_features.shape
+            visual_features_concat = visual_features.view(B, N * T_patches, D)
+            T = visual_features_concat.shape[1]
+            waypoints_repeated = waypoints.unsqueeze(1).repeat(1, T, 1)
+            fused_feat = torch.cat([visual_features_concat, waypoints_repeated], dim=-1)
 
-            output.update(
-                {
-                    f"planning_loss_cls_{decoder_idx}": cls_loss,
-                    f"planning_loss_reg_{decoder_idx}": reg_loss,
-                    f"planning_loss_status_{decoder_idx}": status_loss,
-                }
-            )
+            if self.prev_fused_feat is not None and self.prev_visual_feat is not None:
+                encoded_fused_feat = self.action_aware_encoder(self.prev_fused_feat)
+                pred_visual_feat = self.world_model_decoder(encoded_fused_feat, encoded_fused_feat)
+                wm_loss = F.mse_loss(pred_visual_feat, visual_features_concat)
+                output[f"world_model_loss_{decoder_idx}"] = wm_loss *0.8
+            else:
+                encoded_fused_feat = self.action_aware_encoder(fused_feat)
+                dummy_input = encoded_fused_feat[:, :1, :].clone()
+                dummy_target = encoded_fused_feat[:, :1, :].clone().detach()
+                dummy_pred = self.world_model_decoder(dummy_input, dummy_input)
+                dummy_loss = F.mse_loss(dummy_pred, dummy_target) * 1e-6 
+                output[f"world_model_loss_{decoder_idx}"] = dummy_loss
+
+            self.prev_fused_feat = fused_feat.detach()
+            self.prev_visual_feat = visual_features_concat.detach()
+
+            reg_loss = self.plan_loss_reg(reg_pred,
+                                          reg_target,
+                                          weight=reg_weight)
+            status_loss = self.plan_loss_status(status.squeeze(1),
+                                                data['ego_status'])
+
+            output.update({
+                f"planning_loss_cls_{decoder_idx}": cls_loss,
+                f"planning_loss_reg_{decoder_idx}": reg_loss,
+                f"planning_loss_status_{decoder_idx}": status_loss,
+            })
 
         return output
 

@@ -23,6 +23,8 @@ except:
 __all__ = ["SparseDrive"]
 
 
+from transformers import AutoImageProcessor, AutoModel
+
 @DETECTORS.register_module()
 class SparseDrive(BaseDetector):
     def __init__(
@@ -57,6 +59,14 @@ class SparseDrive(BaseDetector):
             self.grid_mask = GridMask(
                 True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7
             ) 
+
+        self.dino_model = AutoModel.from_pretrained('facebook/dinov2-base')
+        self.dino_model.eval()
+        for p in self.dino_model.parameters():
+            p.requires_grad = False
+        self.dino_mean = torch.tensor([0.485, 0.456, 0.406], device='cuda').view(1, 1, 3, 1, 1)
+        self.dino_std  = torch.tensor([0.229, 0.224, 0.225], device='cuda').view(1, 1, 3, 1, 1)
+
 
     @auto_fp16(apply_to=("img",), out_fp32=True)
     def extract_feat(self, img, return_depth=False, metas=None):
@@ -96,6 +106,18 @@ class SparseDrive(BaseDetector):
             return self.forward_test(img, **data)
 
     def forward_train(self, img, **data):
+
+        img_dino = img.clone().detach()
+        img_dino = (img_dino - img_dino.min()) / (img_dino.max() - img_dino.min())
+        img_dino_norm = (img_dino - self.dino_mean) / self.dino_std
+        B, N, C, H, W = img_dino_norm.shape
+        img_dino_input = img_dino_norm.view(B * N, C, H, W)
+        with torch.no_grad():
+            dino_features = self.dino_model(img_dino_input).last_hidden_state
+        dino_features = dino_features.view(B, N, 901, -1)
+        data['dino_features'] = dino_features
+
+
         feature_maps, depths = self.extract_feat(img, True, data)
         model_outs = self.head(feature_maps, data)
         output = self.head.loss(model_outs, data)
