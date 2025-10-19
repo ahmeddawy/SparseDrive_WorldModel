@@ -139,15 +139,11 @@ class SparseDrive(BaseDetector):
             dino_features = self.dino_model(img_dino_input).last_hidden_state
         
         # Reshape features based on actual token count from DINO
-        # Don't enforce any specific token count as it depends on the exact DINO model variant
         actual_tokens = dino_features.shape[1]
-        # if dino_features.shape[1] != 901:  # Just for info, not enforcing this
-        #     print(f"Info: DINO feature shape {dino_features.shape}, using the actual token count.")
         
         dino_features = dino_features.view(B, N, dino_features.shape[1], -1)
         data['dino_features'] = dino_features
         
-        # Continue with existing code
         feature_maps, depths = self.extract_feat(img, True, data)
         model_outs = self.head(feature_maps, data)
         output = self.head.loss(model_outs, data)
