@@ -17,7 +17,9 @@ os.makedirs(f'vis/kmeans/{version}', exist_ok=True)
 
 K = 6
 
-fp = f'data/infos/{version}/nuscenes_infos_train.pkl'
+# fp = f'data/infos/{version}/nuscenes_infos_train.pkl'
+root = 'data/infos/' if version == 'trainval' else 'data/infos/mini/'
+fp = f'{root}nuscenes_infos_train.pkl'
 
 print(f"Using dataset version: {version}")
 print(f"Output will be saved to: data/kmeans/{version}/kmeans_plan_{K}.npy")
