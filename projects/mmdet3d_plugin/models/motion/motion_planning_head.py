@@ -142,8 +142,8 @@ class MotionPlanningHead(BaseModule):
         self.num_map = num_map
 
 
-        # This is the Worl Model part added to the code
-        dino_features_dim = 768
+        # This is the World Model part added to the code
+        dino_features_dim = 1024
         self.action_aware_encoder = nn.Sequential(
             nn.Linear(dino_features_dim + 12, dino_features_dim),
             nn.ReLU(inplace=True), nn.Linear(dino_features_dim, dino_features_dim),
@@ -485,6 +485,7 @@ class MotionPlanningHead(BaseModule):
             waypoints = waypoints.reshape(reg_pred.shape[0], reg_pred.shape[1] * reg_pred.shape[2])
             visual_features = model_outs["dino_features"]
             B, N, T_patches, D = visual_features.shape
+            # Flatten all tokens from all cameras into a single dimension
             visual_features_concat = visual_features.view(B, N * T_patches, D)
             T = visual_features_concat.shape[1]
             waypoints_repeated = waypoints.unsqueeze(1).repeat(1, T, 1)

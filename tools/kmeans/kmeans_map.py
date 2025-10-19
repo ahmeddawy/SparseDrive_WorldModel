@@ -8,10 +8,20 @@ from sklearn.cluster import KMeans
 
 import mmcv
 
+# Get dataset version from environment variable, default to mini if not set
+version = os.environ.get('NUSCENES_VERSION', 'mini')
+kmeans_dir = f'data/kmeans/{version}'
+vis_dir = f'vis/kmeans/{version}'
+
+os.makedirs(kmeans_dir, exist_ok=True)
+os.makedirs(vis_dir, exist_ok=True)
+
 K = 100
 num_sample = 20
 
-fp = 'data/infos/nuscenes_infos_train.pkl'
+# Use the appropriate info file based on the dataset version
+info_dir = 'data/infos/' if version == 'trainval' else 'data/infos/mini/'
+fp = f'{info_dir}nuscenes_infos_train.pkl'
 data = mmcv.load(fp)
 data_infos = list(sorted(data["infos"], key=lambda e: e["timestamp"]))
 center = []
@@ -30,5 +40,13 @@ for i in range(K):
     x = vecs[i, :, 0]
     y = vecs[i, :, 1]
     plt.plot(x, y, linewidth=1, marker='o', linestyle='-', markersize=2)
-plt.savefig(f'vis/kmeans/map_anchor_{K}', bbox_inches='tight')
+plt.savefig(f'{vis_dir}/map_anchor_{K}', bbox_inches='tight')
+
+# Save to version-specific directory
+np.save(f'{kmeans_dir}/kmeans_map_{K}.npy', vecs)
+
+# Also save to common location for backward compatibility
+os.makedirs('data/kmeans', exist_ok=True)
 np.save(f'data/kmeans/kmeans_map_{K}.npy', vecs)
+
+print(f"Saved kmeans map anchors for {version} dataset")

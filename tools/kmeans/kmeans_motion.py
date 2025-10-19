@@ -8,6 +8,13 @@ from sklearn.cluster import KMeans
 
 import mmcv
 
+# Use environment variable or default to mini
+version = os.environ.get('NUSCENES_VERSION', 'mini')
+
+# Create necessary directories
+os.makedirs(f'data/kmeans/{version}', exist_ok=True)
+os.makedirs(f'vis/kmeans/{version}', exist_ok=True)
+
 CLASSES = [
     "car",
     "truck",
@@ -41,7 +48,9 @@ def lidar2agent(trajs_offset, boxes):
 K = 6
 DIS_THRESH = 55
 
-fp = 'data/infos/nuscenes_infos_train.pkl'
+fp = f'data/infos/{version}/nuscenes_infos_train.pkl'
+print(f"Using dataset version: {version}")
+print(f"Output will be saved to: data/kmeans/{version}/kmeans_motion_{K}.npy")
 data = mmcv.load(fp)
 data_infos = list(sorted(data["infos"], key=lambda e: e["timestamp"]))
 intention = dict()
@@ -94,8 +103,10 @@ for i in range(len(CLASSES)):
     clusters.append(cluster)
     for j in range(K):
         plt.scatter(cluster[j, :, 0], cluster[j, :,1])
-    plt.savefig(f'vis/kmeans/motion_intention_{CLASSES[i]}_{K}', bbox_inches='tight')
+    plt.savefig(f'vis/kmeans/{version}/motion_intention_{CLASSES[i]}_{K}', 
+              bbox_inches='tight')
     plt.close()
 
 clusters = np.stack(clusters, axis=0)
-np.save(f'data/kmeans/kmeans_motion_{K}.npy', clusters)
+np.save(f'data/kmeans/{version}/kmeans_motion_{K}.npy', clusters)
+print("Clustering complete. Results saved.")
