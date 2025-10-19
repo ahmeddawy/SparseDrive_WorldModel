@@ -109,6 +109,9 @@ def create_nuscenes_infos(root_path,
 
     # filter existing scenes.
     available_scenes = get_available_scenes(nusc)
+    print('Available scenes for info generation:')
+    for scene in available_scenes:
+        print(f" - {scene['name']}")
     available_scene_names = [s['name'] for s in available_scenes]
     train_scenes = list(
         filter(lambda x: x in available_scene_names, train_scenes))
@@ -176,6 +179,11 @@ def get_available_scenes(nusc):
         while has_more_frames:
             lidar_path, boxes, _ = nusc.get_sample_data(sd_rec['token'])
             lidar_path = str(lidar_path)
+            if not os.path.isfile(lidar_path):
+                print(f"File not found: {lidar_path}")
+                scene_not_exist = True
+                break
+
             if os.getcwd() in lidar_path:
                 # path from lyftdataset is absolute path
                 lidar_path = lidar_path.split(f'{os.getcwd()}/')[-1]
@@ -229,8 +237,10 @@ def _fill_trainval_infos(nusc,
                              sd_rec['calibrated_sensor_token'])
         pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])
         lidar_path, boxes, _ = nusc.get_sample_data(lidar_token)
+        if not os.path.isfile(lidar_path):
+            print(f"File not found: {lidar_path}")
+            continue
         mmcv.check_file_exist(lidar_path)
-
         info = {
             'lidar_path': lidar_path,
             'token': sample['token'],
@@ -581,15 +591,15 @@ if __name__ == '__main__':
             dataset_name='NuScenesDataset',
             out_dir=args.out_dir,
             max_sweeps=args.max_sweeps)
-        test_version = f'{args.version}-test'
-        nuscenes_data_prep(
-            root_path=args.root_path,
-            can_bus_root_path=args.canbus,
-            info_prefix=args.extra_tag,
-            version=test_version,
-            dataset_name='NuScenesDataset',
-            out_dir=args.out_dir,
-            max_sweeps=args.max_sweeps)
+        # test_version = f'{args.version}-test'
+        # nuscenes_data_prep(
+        #     root_path=args.root_path,
+        #     can_bus_root_path=args.canbus,
+        #     info_prefix=args.extra_tag,
+        #     version=test_version,
+        #     dataset_name='NuScenesDataset',
+        #     out_dir=args.out_dir,
+        #     max_sweeps=args.max_sweeps)
     elif args.dataset == 'nuscenes' and args.version == 'v1.0-mini':
         train_version = f'{args.version}'
         nuscenes_data_prep(

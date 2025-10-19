@@ -1,7 +1,7 @@
 from inspect import signature
 
 import torch
-
+import torch.nn.functional as F
 from mmcv.runner import force_fp32, auto_fp16
 from mmcv.utils import build_from_cfg
 from mmcv.cnn.bricks.registry import PLUGIN_LAYERS
@@ -60,12 +60,14 @@ class SparseDrive(BaseDetector):
                 True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7
             ) 
 
-        self.dino_model = AutoModel.from_pretrained('facebook/dinov2-base')
+        # Upgrading to DinoV2-large (more powerful than DinoV2-base)
+        self.dino_model = AutoModel.from_pretrained('facebook/dinov2-large')
         self.dino_model.eval()
         for p in self.dino_model.parameters():
             p.requires_grad = False
+        # ImageNet normalization values
         self.dino_mean = torch.tensor([0.485, 0.456, 0.406], device='cuda').view(1, 1, 3, 1, 1)
-        self.dino_std  = torch.tensor([0.229, 0.224, 0.225], device='cuda').view(1, 1, 3, 1, 1)
+        self.dino_std = torch.tensor([0.229, 0.224, 0.225], device='cuda').view(1, 1, 3, 1, 1)
 
 
     @auto_fp16(apply_to=("img",), out_fp32=True)
@@ -106,18 +108,46 @@ class SparseDrive(BaseDetector):
             return self.forward_test(img, **data)
 
     def forward_train(self, img, **data):
-
+        # Clone image for DINO processing to avoid modifying original
         img_dino = img.clone().detach()
-        img_dino = (img_dino - img_dino.min()) / (img_dino.max() - img_dino.min())
+        
+        # Standard ImageNet normalization directly (skip min-max)
         img_dino_norm = (img_dino - self.dino_mean) / self.dino_std
+        
+        # Handle multi-view images
         B, N, C, H, W = img_dino_norm.shape
-        img_dino_input = img_dino_norm.view(B * N, C, H, W)
+        
+        # Check if resize is needed (DINO expects 224×224)
+        if H != 224 or W != 224:
+            img_dino_flat = img_dino_norm.view(B * N, C, H, W)
+            img_dino_input = F.interpolate(
+                img_dino_flat,
+                size=(224, 224),
+                mode='bilinear',
+                align_corners=False
+            )
+        else:
+            img_dino_input = img_dino_norm.view(B * N, C, H, W)
+        
+        # Ensure model and input are on same device
+        device = img_dino_input.device
+        if next(self.dino_model.parameters()).device != device:
+            self.dino_model = self.dino_model.to(device)
+        
+        # Extract features
         with torch.no_grad():
             dino_features = self.dino_model(img_dino_input).last_hidden_state
-        dino_features = dino_features.view(B, N, 901, -1)
+        
+        # Reshape features based on actual token count from DINO
+        # Don't enforce any specific token count as it depends on the exact DINO model variant
+        actual_tokens = dino_features.shape[1]
+        # if dino_features.shape[1] != 901:  # Just for info, not enforcing this
+        #     print(f"Info: DINO feature shape {dino_features.shape}, using the actual token count.")
+        
+        dino_features = dino_features.view(B, N, dino_features.shape[1], -1)
         data['dino_features'] = dino_features
-
-
+        
+        # Continue with existing code
         feature_maps, depths = self.extract_feat(img, True, data)
         model_outs = self.head(feature_maps, data)
         output = self.head.loss(model_outs, data)
@@ -134,8 +164,38 @@ class SparseDrive(BaseDetector):
             return self.simple_test(img, **data)
 
     def simple_test(self, img, **data):
+        # Extract DINO features for inference too
+        img_dino = img.clone().detach()
+        img_dino_norm = (img_dino - self.dino_mean) / self.dino_std
+        B, N, C, H, W = img_dino_norm.shape
+        
+        # Check if resize is needed (DINO expects 224×224)
+        if H != 224 or W != 224:
+            img_dino_flat = img_dino_norm.view(B * N, C, H, W)
+            img_dino_input = F.interpolate(
+                img_dino_flat, 
+                size=(224, 224), 
+                mode='bilinear', 
+                align_corners=False
+            )
+        else:
+            img_dino_input = img_dino_norm.view(B * N, C, H, W)
+        
+        # Ensure model and input are on same device
+        device = img_dino_input.device
+        if next(self.dino_model.parameters()).device != device:
+            self.dino_model = self.dino_model.to(device)
+            
+        # Extract features
+        with torch.no_grad():
+            dino_features = self.dino_model(img_dino_input).last_hidden_state
+            
+        # Reshape features to match expected format
+        dino_features = dino_features.view(B, N, dino_features.shape[1], -1)
+        data['dino_features'] = dino_features
+        
+        # Continue with normal processing
         feature_maps = self.extract_feat(img)
-
         model_outs = self.head(feature_maps, data)
         results = self.head.post_process(model_outs, data)
         output = [{"img_bbox": result} for result in results]
@@ -146,4 +206,5 @@ class SparseDrive(BaseDetector):
         for key in data.keys():
             if isinstance(data[key], list):
                 data[key] = data[key][0]
+        # We use simple_test which already handles DINO feature extraction
         return self.simple_test(img[0], **data)

@@ -1,6 +1,8 @@
 # ================ base config ===================
-version = 'mini'
-version = 'trainval'
+import os
+
+# Get dataset version from environment variable, default to mini if not set
+version = os.environ.get('NUSCENES_VERSION', 'mini')
 length = {'trainval': 28130, 'mini': 323}
 
 plugin = True
@@ -9,8 +11,8 @@ dist_params = dict(backend="nccl")
 log_level = "INFO"
 work_dir = None
 
-total_batch_size = 48
-num_gpus = 8
+total_batch_size = 4  # Further reduced to handle DINO memory usage
+num_gpus = 1  # Using single GPU
 batch_size = total_batch_size // num_gpus
 num_iters_per_epoch = int(length[version] // (num_gpus * batch_size))
 num_epochs = 10
@@ -127,7 +129,7 @@ model = dict(
                 type="InstanceBank",
                 num_anchor=900,
                 embed_dims=embed_dims,
-                anchor="data/kmeans/kmeans_det_900.npy",
+                anchor=f"data/kmeans/{version}/kmeans_det_900.npy",
                 anchor_handler=dict(type="SparseBox3DKeyPointsGenerator"),
                 num_temp_instances=600 if temporal else -1,
                 confidence_decay=0.6,
@@ -272,7 +274,7 @@ model = dict(
                 type="InstanceBank",
                 num_anchor=100,
                 embed_dims=embed_dims,
-                anchor="data/kmeans/kmeans_map_100.npy",
+                anchor=f"data/kmeans/{version}/kmeans_map_100.npy",
                 anchor_handler=dict(type="SparsePoint3DKeyPointsGenerator"),
                 num_temp_instances=33 if temporal_map else -1,
                 confidence_decay=0.6,
@@ -402,8 +404,8 @@ model = dict(
             fut_mode=fut_mode,
             ego_fut_ts=ego_fut_ts,
             ego_fut_mode=ego_fut_mode,
-            motion_anchor=f'data/kmeans/kmeans_motion_{fut_mode}.npy',
-            plan_anchor=f'data/kmeans/kmeans_plan_{ego_fut_mode}.npy',
+            motion_anchor=f'data/kmeans/{version}/kmeans_motion_{fut_mode}.npy',
+            plan_anchor=f'data/kmeans/{version}/kmeans_plan_{ego_fut_mode}.npy',
             embed_dims=embed_dims,
             decouple_attn=decouple_attn_motion,
             instance_queue=dict(
@@ -509,6 +511,7 @@ model = dict(
 dataset_type = "NuScenes3DDataset"
 data_root = "data/nuscenes/"
 anno_root = "data/infos/" if version == 'trainval' else "data/infos/mini/"
+print(f"\n\n*** Using nuScenes {version} dataset ***\n\n")
 file_client_args = dict(backend="disk")
 
 img_norm_cfg = dict(

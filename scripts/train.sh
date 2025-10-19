@@ -1,11 +1,11 @@
-## stage1
-bash ./tools/dist_train.sh \
-   projects/configs/sparsedrive_small_stage1.py \
-   8 \
-   --deterministic
+## stage1 (skipped as we have the checkpoint)
+# bash ./tools/dist_train.sh \
+#    projects/configs/sparsedrive_small_stage1.py \
+#    1 \
+#    --deterministic
 
-## stage2
+## stage2 (using pre-trained stage1 checkpoint)
 bash ./tools/dist_train.sh \
    projects/configs/sparsedrive_small_stage2.py \
-   8 \
+   1 \
    --deterministic
