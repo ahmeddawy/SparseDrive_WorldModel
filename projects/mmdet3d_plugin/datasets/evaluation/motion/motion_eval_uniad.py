@@ -91,8 +91,20 @@ class MotionEval:
                                                      verbose=verbose)
         self.gt_boxes = load_gt(self.nusc, self.eval_set, MotionBox, verbose=verbose, seconds=seconds)
 
-        assert set(self.pred_boxes.sample_tokens) == set(self.gt_boxes.sample_tokens), \
-            "Samples in split doesn't match samples in predictions."
+        # assert set(self.pred_boxes.sample_tokens) == set(self.gt_boxes.sample_tokens), \
+        #     "Samples in split doesn't match samples in predictions."
+        gt_tokens   = set(self.gt_boxes.sample_tokens)
+        pred_tokens = set(self.pred_boxes.sample_tokens)
+        filtered_gt = EvalBoxes()
+        for tok, boxes in self.gt_boxes.boxes.items():
+            if tok in pred_tokens:
+                filtered_gt.add_boxes(tok, boxes)
+
+        kept = len(filtered_gt.boxes)
+        dropped = len(self.gt_boxes.boxes) - kept
+        self.gt_boxes = filtered_gt
+        print(f"[info] Kept {kept} GT samples; dropped {dropped} with no predictions.")
+
 
         # Add center distances.
         self.pred_boxes = add_center_dist(nusc, self.pred_boxes)

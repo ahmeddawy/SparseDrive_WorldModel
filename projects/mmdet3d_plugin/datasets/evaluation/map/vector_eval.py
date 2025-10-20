@@ -35,7 +35,7 @@ class VectorEvaluate(object):
         classes = self.dataset.MAP_CLASSES
         self.cat2id = {cls: i for i, cls in enumerate(classes)}
         self.id2cat = {v: k for k, v in self.cat2id.items()}
-        self.n_workers = n_workers
+        self.n_workers = 0 #n_workers
         self.thresholds = [0.5, 1.0, 1.5]
         
     @cached_property

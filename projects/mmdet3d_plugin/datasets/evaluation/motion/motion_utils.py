@@ -41,47 +41,6 @@ motion_name_mapping = {
 
 
 
-def scene_files_exist(
-    nusc,
-    scene_token: str,
-    dataroot: str,
-    channels: Optional[Iterable[str]] = None,   # e.g. ("CAM_FRONT","CAM_FRONT_LEFT","CAM_FRONT_RIGHT","CAM_BACK","LIDAR_TOP")
-    stop_early: bool = True                     # return as soon as a file is missing
-) -> Tuple[bool, List[str]]:
-    """
-    Verify that all keyframe files for the given scene exist locally.
-    If `channels` is None -> checks all sample['data'] entries (all sensors at keyframes).
-    Returns: (ok, missing_paths_or_reasons)
-    """
-    scene = nusc.get("scene", scene_token)
-    sample_token = scene["first_sample_token"]
-    missing: List[str] = []
-
-    while sample_token:
-        sample = nusc.get("sample", sample_token)
-
-        if channels is None:
-            sd_tokens = list(sample["data"].values())
-            chan_names = list(sample["data"].keys())
-        else:
-            chan_names = list(channels)
-            sd_tokens = [sample["data"].get(ch) for ch in chan_names]
-
-        for ch, sd_tok in zip(chan_names, sd_tokens):
-            if sd_tok is None:
-                missing.append(f"{ch}: no sample_data entry for sample {sample['token']}")
-                if stop_early: return False, missing
-                continue
-            sd = nusc.get("sample_data", sd_tok)
-            fp = os.path.join(dataroot, sd["file_name"])
-            if not os.path.isfile(fp):
-                missing.append(f"Missing file: {fp}")
-                if stop_early: return False, missing
-
-        sample_token = sample["next"]
-
-    return len(missing) == 0, missing
-
 
 class MotionBox(DetectionBox):
     """ Data class used during detection evaluation. Can be a prediction or ground truth."""
@@ -251,20 +210,8 @@ def load_gt(nusc: NuScenes, eval_split: str, box_cls, verbose: bool = False, sec
     for sample_token in sample_tokens_all:
         scene_token = nusc.get('sample', sample_token)['scene_token']
         scene_record = nusc.get('scene', scene_token)
-        # only compute once per scene
-        if scene_token not in scene_ok_cache:
-            ok, missing = scene_files_exist(
-                nusc,
-                scene_token,
-                dataroot=nusc.dataroot,  # Use NuScenes dataroot
-                channels=("CAM_FRONT","CAM_FRONT_LEFT","CAM_FRONT_RIGHT","CAM_BACK","LIDAR_TOP"),  # adjust as needed
-                stop_early=True
-            )
-            scene_ok_cache[scene_token] = (ok, missing)
 
-        exist, _ = scene_ok_cache[scene_token]
-
-        if scene_record['name'] in splits[eval_split] and exist:
+        if scene_record['name'] in splits[eval_split]:
             sample_tokens.append(sample_token)
 
     all_annotations = EvalBoxes()
