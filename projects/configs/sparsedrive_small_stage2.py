@@ -15,7 +15,7 @@ total_batch_size = 4  # Further reduced to handle DINO memory usage
 num_gpus = 1  # Using single GPU
 batch_size = total_batch_size // num_gpus
 num_iters_per_epoch = int(length[version] // (num_gpus * batch_size))
-num_epochs = 10
+num_epochs = 100  # Extended training duration from 50 to 100 epochs
 checkpoint_epoch_interval = 10
 
 checkpoint_config = dict(
@@ -684,21 +684,16 @@ data = dict(
 
 # ================== training ========================
 optimizer = dict(
-    type="AdamW",
-    lr=3e-4,
+    type='AdamW',
+    lr=0.0001,  # Reduced from 0.0003
     weight_decay=0.001,
-    paramwise_cfg=dict(
-        custom_keys={
-            "img_backbone": dict(lr_mult=0.1),
-        }
-    ),
-)
-optimizer_config = dict(grad_clip=dict(max_norm=25, norm_type=2))
+    paramwise_cfg=dict(custom_keys=dict(img_backbone=dict(lr_mult=0.1))))
+optimizer_config = dict(grad_clip=dict(max_norm=10, norm_type=2))
 lr_config = dict(
     policy="CosineAnnealing",
     warmup="linear",
-    warmup_iters=500,
-    warmup_ratio=1.0 / 3,
+    warmup_iters=1000,  # Increased warmup iterations
+    warmup_ratio=0.1,   # Lower warmup starting ratio
     min_lr_ratio=1e-3,
 )
 runner = dict(
