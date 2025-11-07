@@ -15,12 +15,11 @@ total_batch_size = 4  # Further reduced to handle DINO memory usage
 num_gpus = 1  # Using single GPU
 batch_size = total_batch_size // num_gpus
 num_iters_per_epoch = int(length[version] // (num_gpus * batch_size))
-num_epochs = 100  # Extended training duration from 50 to 100 epochs
-checkpoint_epoch_interval = 10
+num_epochs = 10  # Extended training duration from 50 to 100 epochs
+checkpoint_epoch_interval = 2
 
-checkpoint_config = dict(
-    interval=num_iters_per_epoch * checkpoint_epoch_interval
-)
+checkpoint_config = dict(interval=num_iters_per_epoch *
+                         checkpoint_epoch_interval)
 log_config = dict(
     interval=51,
     hooks=[
@@ -31,9 +30,10 @@ log_config = dict(
 load_from = None
 resume_from = None
 workflow = [("train", 1)]
-fp16 = dict(loss_scale=32.0)
+fp16 = dict(
+    loss_scale=16.0,  # Reduced from 32.0
+)
 input_shape = (704, 256)
-
 
 # ================== model ========================
 class_names = [
@@ -62,7 +62,7 @@ fut_ts = 12
 fut_mode = 6
 ego_fut_ts = 6
 ego_fut_mode = 6
-queue_length = 4 # history + current
+queue_length = 4  # history + current
 
 embed_dims = 256
 num_groups = 8
@@ -145,36 +145,29 @@ model = dict(
                 out_loops=4 if decouple_attn else 2,
             ),
             num_single_frame_decoder=num_single_frame_decoder,
-            operation_order=(
-                [
-                    "gnn",
-                    "norm",
-                    "deformable",
-                    "ffn",
-                    "norm",
-                    "refine",
-                ]
-                * num_single_frame_decoder
-                + [
-                    "temp_gnn",
-                    "gnn",
-                    "norm",
-                    "deformable",
-                    "ffn",
-                    "norm",
-                    "refine",
-                ]
-                * (num_decoder - num_single_frame_decoder)
-            )[2:],
+            operation_order=([
+                "gnn",
+                "norm",
+                "deformable",
+                "ffn",
+                "norm",
+                "refine",
+            ] * num_single_frame_decoder + [
+                "temp_gnn",
+                "gnn",
+                "norm",
+                "deformable",
+                "ffn",
+                "norm",
+                "refine",
+            ] * (num_decoder - num_single_frame_decoder))[2:],
             temp_graph_model=dict(
                 type="MultiheadFlashAttention",
                 embed_dims=embed_dims if not decouple_attn else embed_dims * 2,
                 num_heads=num_groups,
                 batch_first=True,
                 dropout=drop_out,
-            )
-            if temporal
-            else None,
+            ) if temporal else None,
             graph_model=dict(
                 type="MultiheadFlashAttention",
                 embed_dims=embed_dims if not decouple_attn else embed_dims * 2,
@@ -259,7 +252,8 @@ model = dict(
             loss_reg=dict(
                 type="SparseBox3DLoss",
                 loss_box=dict(type="L1Loss", loss_weight=0.25),
-                loss_centerness=dict(type="CrossEntropyLoss", use_sigmoid=True),
+                loss_centerness=dict(type="CrossEntropyLoss",
+                                     use_sigmoid=True),
                 loss_yawness=dict(type="GaussianFocalLoss"),
                 cls_allow_reverse=[class_names.index("barrier")],
             ),
@@ -286,39 +280,34 @@ model = dict(
                 num_sample=num_sample,
             ),
             num_single_frame_decoder=num_single_frame_decoder_map,
-            operation_order=(
-                [
-                    "gnn",
-                    "norm",
-                    "deformable",
-                    "ffn",
-                    "norm",
-                    "refine",
-                ]
-                * num_single_frame_decoder_map
-                + [
-                    "temp_gnn",
-                    "gnn",
-                    "norm",
-                    "deformable",
-                    "ffn",
-                    "norm",
-                    "refine",
-                ]
-                * (num_decoder - num_single_frame_decoder_map)
-            )[:],
+            operation_order=([
+                "gnn",
+                "norm",
+                "deformable",
+                "ffn",
+                "norm",
+                "refine",
+            ] * num_single_frame_decoder_map + [
+                "temp_gnn",
+                "gnn",
+                "norm",
+                "deformable",
+                "ffn",
+                "norm",
+                "refine",
+            ] * (num_decoder - num_single_frame_decoder_map))[:],
             temp_graph_model=dict(
                 type="MultiheadFlashAttention",
-                embed_dims=embed_dims if not decouple_attn_map else embed_dims * 2,
+                embed_dims=embed_dims
+                if not decouple_attn_map else embed_dims * 2,
                 num_heads=num_groups,
                 batch_first=True,
                 dropout=drop_out,
-            )
-            if temporal_map
-            else None,
+            ) if temporal_map else None,
             graph_model=dict(
                 type="MultiheadFlashAttention",
-                embed_dims=embed_dims if not decouple_attn_map else embed_dims * 2,
+                embed_dims=embed_dims
+                if not decouple_attn_map else embed_dims * 2,
                 num_heads=num_groups,
                 batch_first=True,
                 dropout=drop_out,
@@ -350,7 +339,7 @@ model = dict(
                     num_sample=num_sample,
                     num_learnable_pts=3,
                     fix_height=(0, 0.5, -0.5, 1, -1),
-                    ground_height=-1.84023, # ground height in lidar frame
+                    ground_height=-1.84023,  # ground height in lidar frame
                 ),
             ),
             refine_layer=dict(
@@ -366,7 +355,10 @@ model = dict(
                     cost=dict(
                         type='MapQueriesCost',
                         cls_cost=dict(type='FocalLossCost', weight=1.0),
-                        reg_cost=dict(type='LinesL1Cost', weight=10.0, beta=0.01, permute=True),
+                        reg_cost=dict(type='LinesL1Cost',
+                                      weight=10.0,
+                                      beta=0.01,
+                                      permute=True),
                     ),
                 ),
                 num_cls=num_map_classes,
@@ -413,32 +405,32 @@ model = dict(
                 embed_dims=embed_dims,
                 queue_length=queue_length,
                 tracking_threshold=0.2,
-                feature_map_scale=(input_shape[1]/strides[-1], input_shape[0]/strides[-1]),
+                feature_map_scale=(input_shape[1] / strides[-1],
+                                   input_shape[0] / strides[-1]),
             ),
-            operation_order=(
-                [
-                    "temp_gnn",
-                    "gnn",
-                    "norm",
-                    "cross_gnn",
-                    "norm",
-                    "ffn",                    
-                    "norm",
-                ] * 3 +
-                [
-                    "refine",
-                ]
-            ),
+            operation_order=([
+                "temp_gnn",
+                "gnn",
+                "norm",
+                "cross_gnn",
+                "norm",
+                "ffn",
+                "norm",
+            ] * 3 + [
+                "refine",
+            ]),
             temp_graph_model=dict(
                 type="MultiheadAttention",
-                embed_dims=embed_dims if not decouple_attn_motion else embed_dims * 2,
+                embed_dims=embed_dims
+                if not decouple_attn_motion else embed_dims * 2,
                 num_heads=num_groups,
                 batch_first=True,
                 dropout=drop_out,
             ),
             graph_model=dict(
                 type="MultiheadFlashAttention",
-                embed_dims=embed_dims if not decouple_attn_motion else embed_dims * 2,
+                embed_dims=embed_dims
+                if not decouple_attn_motion else embed_dims * 2,
                 num_heads=num_groups,
                 batch_first=True,
                 dropout=drop_out,
@@ -469,16 +461,12 @@ model = dict(
                 ego_fut_ts=ego_fut_ts,
                 ego_fut_mode=ego_fut_mode,
             ),
-            motion_sampler=dict(
-                type="MotionTarget",
-            ),
-            motion_loss_cls=dict(
-                type='FocalLoss',
-                use_sigmoid=True,
-                gamma=2.0,
-                alpha=0.25,
-                loss_weight=0.2
-            ),
+            motion_sampler=dict(type="MotionTarget", ),
+            motion_loss_cls=dict(type='FocalLoss',
+                                 use_sigmoid=True,
+                                 gamma=2.0,
+                                 alpha=0.25,
+                                 loss_weight=0.2),
             motion_loss_reg=dict(type='L1Loss', loss_weight=0.2),
             planning_sampler=dict(
                 type="PlanningTarget",
@@ -514,9 +502,9 @@ anno_root = "data/infos/" if version == 'trainval' else "data/infos/mini/"
 print(f"\n\n*** Using nuScenes {version} dataset ***\n\n")
 file_client_args = dict(backend="disk")
 
-img_norm_cfg = dict(
-    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True
-)
+img_norm_cfg = dict(mean=[123.675, 116.28, 103.53],
+                    std=[58.395, 57.12, 57.375],
+                    to_rgb=True)
 train_pipeline = [
     dict(type="LoadMultiViewImageFromFiles", to_float32=True),
     dict(
@@ -559,7 +547,7 @@ train_pipeline = [
             "focal",
             "gt_bboxes_3d",
             "gt_labels_3d",
-            'gt_map_labels', 
+            'gt_map_labels',
             'gt_map_pts',
             'gt_agent_fut_trajs',
             'gt_agent_fut_masks',
@@ -601,21 +589,13 @@ eval_pipeline = [
         simplify=True,
         normalize=False,
     ),
-    dict(
-        type='Collect', 
-        keys=[
-            'vectors',
-            "gt_bboxes_3d",
-            "gt_labels_3d",
-            'gt_agent_fut_trajs',
-            'gt_agent_fut_masks',
-            'gt_ego_fut_trajs',
-            'gt_ego_fut_masks', 
-            'gt_ego_fut_cmd',
-            'fut_boxes'
-        ],
-        meta_keys=['token', 'timestamp']
-    ),
+    dict(type='Collect',
+         keys=[
+             'vectors', "gt_bboxes_3d", "gt_labels_3d", 'gt_agent_fut_trajs',
+             'gt_agent_fut_masks', 'gt_ego_fut_trajs', 'gt_ego_fut_masks',
+             'gt_ego_fut_cmd', 'fut_boxes'
+         ],
+         meta_keys=['token', 'timestamp']),
 ]
 
 input_modality = dict(
@@ -684,18 +664,29 @@ data = dict(
 
 # ================== training ========================
 optimizer = dict(
-    type='AdamW',
-    lr=0.0001,  # Reduced from 0.0003
-    weight_decay=0.001,
-    paramwise_cfg=dict(custom_keys=dict(img_backbone=dict(lr_mult=0.1))))
-optimizer_config = dict(grad_clip=dict(max_norm=10, norm_type=2))
-lr_config = dict(
-    policy="CosineAnnealing",
-    warmup="linear",
-    warmup_iters=1000,  # Increased warmup iterations
-    warmup_ratio=0.1,   # Lower warmup starting ratio
-    min_lr_ratio=1e-3,
+    type="AdamW",
+    lr=2e-5,  # Further reduced from 5e-5
+    weight_decay=0.01,
+    paramwise_cfg=dict(
+        custom_keys={
+            "img_backbone": dict(lr_mult=0.05),  # More conservative
+            "head.motion_plan_head": dict(lr_mult=0.08),  # More conservative
+            "head.det_head": dict(lr_mult=0.1),  # More conservative
+            "head.map_head": dict(lr_mult=0.1)
+        }),
 )
+
+lr_config = dict(
+    policy='CosineAnnealing',  # Changed from OneCycleLR to CosineAnnealing
+    warmup='linear',           # Linear warmup
+    warmup_iters=num_iters_per_epoch * 2,  # Warmup for 2 epochs
+    warmup_ratio=0.001,        # Start from small learning rate
+    min_lr=1e-7,              # Minimum learning rate at the end
+)
+optimizer_config = dict(
+    grad_clip=dict(max_norm=5.0, norm_type=2),  # Keep your gradient clipping
+)
+
 runner = dict(
     type="IterBasedRunner",
     max_iters=num_iters_per_epoch * num_epochs,
@@ -712,7 +703,7 @@ eval_mode = dict(
     motion_threshhold=0.2,
 )
 evaluation = dict(
-    interval=num_iters_per_epoch*checkpoint_epoch_interval,
+    interval=num_iters_per_epoch * checkpoint_epoch_interval,
     eval_mode=eval_mode,
 )
 # ================== pretrained model ========================

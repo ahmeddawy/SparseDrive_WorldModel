@@ -34,6 +34,63 @@ from projects.mmdet3d_plugin.core.evaluation.eval_hooks import (
 )
 from projects.mmdet3d_plugin.datasets import custom_build_dataset
 
+def debug_dataloader(data_loader, num_batches=2):
+    """Debug function to inspect dataloader contents"""
+    logger = get_root_logger()
+    logger.info("=== Debugging DataLoader ===")
+    
+    for batch_idx, data in enumerate(data_loader):
+        if batch_idx >= num_batches:
+            break
+            
+        logger.info(f"\nBatch {batch_idx}:")
+        
+        # Check temporal information
+        if 'img_metas' in data:
+            # Handle DataContainer properly
+            img_metas = data['img_metas'].data[0]
+            logger.info(f"Number of samples in batch: {len(img_metas)}")
+            for idx, img_meta in enumerate(img_metas):
+                logger.info(f"\nSample {idx} metadata:")
+                logger.info(f"- Frame ID: {img_meta.get('frame_id', 'N/A')}")
+                logger.info(f"- Sample idx: {img_meta.get('sample_idx', 'N/A')}")
+                if 'prev_frame_idx' in img_meta:
+                    logger.info(f"- Previous frame: {img_meta['prev_frame_idx']}")
+                if 'next_frame_idx' in img_meta:
+                    logger.info(f"- Next frame: {img_meta['next_frame_idx']}")
+        
+        # Check image data
+        if 'img' in data:
+            # Handle DataContainer properly
+            imgs = data['img'].data[0]
+            if isinstance(imgs, (list, tuple)):
+                logger.info(f"Temporal sequence length: {len(imgs)}")
+                logger.info(f"Image shape: {imgs[0].shape}")
+            else:
+                logger.info(f"Single image shape: {imgs.shape}")
+        
+        # Check GT data
+        if 'gt_bboxes_3d' in data:
+            # Handle DataContainer properly
+            gt_bboxes = data['gt_bboxes_3d'].data[0]
+            if isinstance(gt_bboxes, list):
+                logger.info(f"Number of 3D boxes per frame: {[len(boxes) for boxes in gt_bboxes]}")
+            else:
+                logger.info(f"Number of 3D boxes: {len(gt_bboxes)}")
+        
+        # Print keys for debugging
+        logger.info("\nAvailable keys in batch:")
+        for k, v in data.items():
+            if hasattr(v, 'data'):
+                logger.info(f"{k}: DataContainer shape={v.data[0].shape if hasattr(v.data[0], 'shape') else len(v.data[0])}")
+            else:
+                logger.info(f"{k}: type={type(v)}")
+        
+        # Memory usage
+        if torch.cuda.is_available():
+            logger.info(f"GPU memory used: {torch.cuda.memory_allocated()/1024**2:.2f} MB")
+            torch.cuda.empty_cache()
+
 
 def custom_train_detector(
     model,
@@ -88,6 +145,9 @@ def custom_train_detector(
         )
         for ds in dataset
     ]
+    # Add debugging code here
+    logger.info("Starting dataloader debugging...")
+    debug_dataloader(data_loaders[0])
 
     # put model on gpus
     if distributed:

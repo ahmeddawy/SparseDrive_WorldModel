@@ -24,6 +24,19 @@ __all__ = ["SparseDrive"]
 
 
 from transformers import AutoImageProcessor, AutoModel
+from PIL import Image
+import os, sys
+
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
+perception_models_path = os.path.join(repo_root, 'perception_models')
+sys.path.append(perception_models_path)
+sys.path.append(os.path.abspath('perception_models'))
+
+import torch
+import matplotlib.pyplot as plt
+from PIL import Image
+import core.vision_encoder.pe as pe
+import core.vision_encoder.transforms as transforms
 
 @DETECTORS.register_module()
 class SparseDrive(BaseDetector):
@@ -60,14 +73,13 @@ class SparseDrive(BaseDetector):
                 True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7
             ) 
 
-        # Upgrading to DinoV2-large (more powerful than DinoV2-base)
-        self.dino_model = AutoModel.from_pretrained('facebook/dinov2-large')
-        self.dino_model.eval()
-        for p in self.dino_model.parameters():
+
+        model_name = 'PE-Core-B16-224'
+        self.pe_model = pe.CLIP.from_config(model_name, pretrained=True)
+        self.pe_model.eval()
+        for p in self.pe_model.parameters():
             p.requires_grad = False
-        # ImageNet normalization values
-        self.dino_mean = torch.tensor([0.485, 0.456, 0.406], device='cuda').view(1, 1, 3, 1, 1)
-        self.dino_std = torch.tensor([0.229, 0.224, 0.225], device='cuda').view(1, 1, 3, 1, 1)
+        self.pe_preprocess = transforms.get_image_transform(self.pe_model.image_size)
 
 
     @auto_fp16(apply_to=("img",), out_fp32=True)
@@ -107,42 +119,32 @@ class SparseDrive(BaseDetector):
         else:
             return self.forward_test(img, **data)
 
+    def extract_pe_features(self, img):
+        # img: (B, N, C, H, W) tensor in [0, 1] or [0, 255]
+        B, N, C, H, W = img.shape
+        img_flat = img.view(B * N, C, H, W)
+        # Convert to PIL and preprocess
+        images = []
+        for i in range(img_flat.shape[0]):
+            # Convert tensor to PIL Image
+            img_np = img_flat[i].cpu().numpy().transpose(1, 2, 0)
+            img_pil = Image.fromarray((img_np * 255).astype('uint8'))
+            images.append(self.pe_preprocess(img_pil))
+        images = torch.stack(images).to(img.device)
+        with torch.no_grad():
+            pe_features = self.pe_model.encode_image(images)
+            # pe_features /= pe_features.norm(dim=-1, keepdim=True)
+        # Reshape to (B, N, feature_dim)
+        pe_features = pe_features.view(B, N, -1)
+        return pe_features
+
     def forward_train(self, img, **data):
         # Clone image for DINO processing to avoid modifying original
         img_dino = img.clone().detach()
-        
-        # Standard ImageNet normalization directly (skip min-max)
-        img_dino_norm = (img_dino - self.dino_mean) / self.dino_std
-        
-        # Handle multi-view images
-        B, N, C, H, W = img_dino_norm.shape
-        
-        # Check if resize is needed (DINO expects 224×224)
-        if H != 224 or W != 224:
-            img_dino_flat = img_dino_norm.view(B * N, C, H, W)
-            img_dino_input = F.interpolate(
-                img_dino_flat,
-                size=(224, 224),
-                mode='bilinear',
-                align_corners=False
-            )
-        else:
-            img_dino_input = img_dino_norm.view(B * N, C, H, W)
-        
-        # Ensure model and input are on same device
-        device = img_dino_input.device
-        if next(self.dino_model.parameters()).device != device:
-            self.dino_model = self.dino_model.to(device)
-        
-        # Extract features
-        with torch.no_grad():
-            dino_features = self.dino_model(img_dino_input).last_hidden_state
-        
-        # Reshape features based on actual token count from DINO
-        actual_tokens = dino_features.shape[1]
-        
-        dino_features = dino_features.view(B, N, dino_features.shape[1], -1)
-        data['dino_features'] = dino_features
+
+        pe_features = self.extract_pe_features(img_dino)
+        data['dino_features'] = pe_features
+
         
         feature_maps, depths = self.extract_feat(img, True, data)
         model_outs = self.head(feature_maps, data)
@@ -162,33 +164,14 @@ class SparseDrive(BaseDetector):
     def simple_test(self, img, **data):
         # Extract DINO features for inference too
         img_dino = img.clone().detach()
-        img_dino_norm = (img_dino - self.dino_mean) / self.dino_std
-        B, N, C, H, W = img_dino_norm.shape
-        
-        # Check if resize is needed (DINO expects 224×224)
-        if H != 224 or W != 224:
-            img_dino_flat = img_dino_norm.view(B * N, C, H, W)
-            img_dino_input = F.interpolate(
-                img_dino_flat, 
-                size=(224, 224), 
-                mode='bilinear', 
-                align_corners=False
-            )
-        else:
-            img_dino_input = img_dino_norm.view(B * N, C, H, W)
-        
         # Ensure model and input are on same device
-        device = img_dino_input.device
-        if next(self.dino_model.parameters()).device != device:
-            self.dino_model = self.dino_model.to(device)
+        device = img_dino.device
+        if next(self.pe_model.parameters()).device != device:
+            self.pe_model = self.pe_model.to(device)
             
-        # Extract features
-        with torch.no_grad():
-            dino_features = self.dino_model(img_dino_input).last_hidden_state
-            
-        # Reshape features to match expected format
-        dino_features = dino_features.view(B, N, dino_features.shape[1], -1)
-        data['dino_features'] = dino_features
+
+        pe_features = self.extract_pe_features(img_dino)
+        data['dino_features'] = pe_features
         
         # Continue with normal processing
         feature_maps = self.extract_feat(img)
