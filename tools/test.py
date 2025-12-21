@@ -126,12 +126,11 @@ def main():
     args = parse_args()
 
     assert (
-        args.out or args.eval or args.format_only or args.show or args.show_dir
-    ), (
-        "Please specify at least one operation (save/eval/format/show the "
-        'results / save the results) with the argument "--out", "--eval"'
-        ', "--format-only", "--show" or "--show-dir"'
-    )
+        args.out or args.eval or args.format_only or args.show
+        or args.show_dir), (
+            "Please specify at least one operation (save/eval/format/show the "
+            'results / save the results) with the argument "--out", "--eval"'
+            ', "--format-only", "--show" or "--show-dir"')
 
     if args.eval and args.format_only:
         raise ValueError("--eval and --format_only cannot be both specified")
@@ -186,14 +185,12 @@ def main():
         if samples_per_gpu > 1:
             # Replace 'ImageToTensor' to 'DefaultFormatBundle'
             cfg.data.test.pipeline = replace_ImageToTensor(
-                cfg.data.test.pipeline
-            )
+                cfg.data.test.pipeline)
     elif isinstance(cfg.data.test, list):
         for ds_cfg in cfg.data.test:
             ds_cfg.test_mode = True
         samples_per_gpu = max(
-            [ds_cfg.pop("samples_per_gpu", 1) for ds_cfg in cfg.data.test]
-        )
+            [ds_cfg.pop("samples_per_gpu", 1) for ds_cfg in cfg.data.test])
         if samples_per_gpu > 1:
             for ds_cfg in cfg.data.test:
                 ds_cfg.pipeline = replace_ImageToTensor(ds_cfg.pipeline)
@@ -213,10 +210,10 @@ def main():
     if cfg.get('work_dir', None) is None:
         # use config filename as default work_dir if cfg.work_dir is None
         cfg.work_dir = osp.join('./work_dirs',
-                                osp.splitext(osp.basename(args.config))[0]) 
+                                osp.splitext(osp.basename(args.config))[0])
     mmcv.mkdir_or_exist(osp.abspath(cfg.work_dir))
     cfg.data.test.work_dir = cfg.work_dir
-    print('work_dir: ',cfg.work_dir)
+    print('work_dir: ', cfg.work_dir)
 
     # build the dataloader
     dataset = build_dataset(cfg.data.test)
@@ -274,9 +271,8 @@ def main():
             device_ids=[torch.cuda.current_device()],
             broadcast_buffers=False,
         )
-        outputs = custom_multi_gpu_test(
-            model, data_loader, args.tmpdir, args.gpu_collect
-        )
+        outputs = custom_multi_gpu_test(model, data_loader, args.tmpdir,
+                                        args.gpu_collect)
 
     rank, _ = get_dist_info()
     if rank == 0:
@@ -288,12 +284,12 @@ def main():
             eval_kwargs = cfg.get("evaluation", {}).copy()
             # hard-code way to remove EvalHook args
             for key in [
-                "interval",
-                "tmpdir",
-                "start",
-                "gpu_collect",
-                "save_best",
-                "rule",
+                    "interval",
+                    "tmpdir",
+                    "start",
+                    "gpu_collect",
+                    "save_best",
+                    "rule",
             ]:
                 eval_kwargs.pop(key, None)
             eval_kwargs.update(kwargs)
@@ -304,16 +300,17 @@ def main():
             eval_kwargs = cfg.get("evaluation", {}).copy()
             # hard-code way to remove EvalHook args
             for key in [
-                "interval",
-                "tmpdir",
-                "start",
-                "gpu_collect",
-                "save_best",
-                "rule",
+                    "interval",
+                    "tmpdir",
+                    "start",
+                    "gpu_collect",
+                    "save_best",
+                    "rule",
             ]:
                 eval_kwargs.pop(key, None)
             eval_kwargs.update(dict(metric=args.eval, **kwargs))
-            print(eval_kwargs)
+            print("hereeeeeeeee:", eval_kwargs)
+            eval_kwargs = {'eval_mode': {'with_det': True, 'with_tracking': True, 'with_map': True, 'with_motion': True, 'with_planning': True, 'tracking_threshold': 0.2, 'motion_threshhold': 0.2}, 'pipeline': None, 'metric': ['bbox']}
             results_dict = dataset.evaluate(outputs, **eval_kwargs)
             print(results_dict)
 

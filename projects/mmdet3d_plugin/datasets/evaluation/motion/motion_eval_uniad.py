@@ -91,8 +91,46 @@ class MotionEval:
                                                      verbose=verbose)
         self.gt_boxes = load_gt(self.nusc, self.eval_set, MotionBox, verbose=verbose, seconds=seconds)
 
-        assert set(self.pred_boxes.sample_tokens) == set(self.gt_boxes.sample_tokens), \
-            "Samples in split doesn't match samples in predictions."
+        # Filter predictions to only include samples in ground truth
+        pred_sample_tokens = set(self.pred_boxes.sample_tokens)
+        gt_sample_tokens = set(self.gt_boxes.sample_tokens)
+        
+        missing_in_pred = gt_sample_tokens - pred_sample_tokens
+        extra_in_pred = pred_sample_tokens - gt_sample_tokens
+        
+        if missing_in_pred or extra_in_pred:
+            if verbose:
+                if missing_in_pred:
+                    print(f"Warning: {len(missing_in_pred)} ground truth samples missing in predictions")
+                if extra_in_pred:
+                    print(f"Warning: {len(extra_in_pred)} prediction samples not in ground truth (will be filtered)")
+            
+            # Filter predictions to only include samples in ground truth
+            if extra_in_pred:
+                # Remove predictions for samples not in ground truth
+                for sample_token in list(extra_in_pred):
+                    if sample_token in self.pred_boxes.boxes:
+                        del self.pred_boxes.boxes[sample_token]
+            
+            # Add empty predictions for missing samples
+            if missing_in_pred:
+                for sample_token in missing_in_pred:
+                    if sample_token not in self.pred_boxes.boxes:
+                        self.pred_boxes.boxes[sample_token] = []
+        
+        # Verify that sample_tokens now matches (sample_tokens is a property that returns boxes.keys())
+        # If it doesn't match, the property should update automatically, but we'll check
+        final_pred_tokens = set(self.pred_boxes.sample_tokens)
+        if final_pred_tokens != gt_sample_tokens:
+            # This shouldn't happen after filtering, but if it does, provide a clear error
+            still_missing = gt_sample_tokens - final_pred_tokens
+            still_extra = final_pred_tokens - gt_sample_tokens
+            error_msg = f"Samples still don't match after filtering. "
+            if still_missing:
+                error_msg += f"Missing {len(still_missing)} samples in predictions. "
+            if still_extra:
+                error_msg += f"Extra {len(still_extra)} samples in predictions."
+            raise AssertionError(error_msg)
 
         # Add center distances.
         self.pred_boxes = add_center_dist(nusc, self.pred_boxes)

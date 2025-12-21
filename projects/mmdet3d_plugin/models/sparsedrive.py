@@ -61,7 +61,12 @@ class SparseDrive(BaseDetector):
     @auto_fp16(apply_to=("img",), out_fp32=True)
     def extract_feat(self, img, return_depth=False, metas=None):
         bs = img.shape[0]
-        if img.dim() == 5:  # multi-view
+        num_frames = 1
+        if img.dim() == 6: # (B, T, V, C, H, W)
+            num_frames = img.shape[1]
+            num_cams = img.shape[2]
+            img = img.flatten(0, 2)
+        elif img.dim() == 5:  # multi-view
             num_cams = img.shape[1]
             img = img.flatten(end_dim=1)
         else:
@@ -75,15 +80,46 @@ class SparseDrive(BaseDetector):
         if self.img_neck is not None:
             feature_maps = list(self.img_neck(feature_maps))
         for i, feat in enumerate(feature_maps):
-            feature_maps[i] = torch.reshape(
-                feat, (bs, num_cams) + feat.shape[1:]
-            )
+            if num_frames > 1:
+                feature_maps[i] = torch.reshape(
+                    feat, (bs, num_frames, num_cams) + feat.shape[1:]
+                )
+            else:
+                feature_maps[i] = torch.reshape(
+                    feat, (bs, num_cams) + feat.shape[1:]
+                )
         if return_depth and self.depth_branch is not None:
-            depths = self.depth_branch(feature_maps, metas.get("focal"))
+            # Depth branch usually expects (B*T, V, C, H, W) or (B, V, C, H, W)?
+            # SparseDrive depth branch takes list of feature maps.
+            # If we have frames, we probably want to run depth on all frames?
+            # But existing depth_branch might expect (B, V, ...)
+            # For simplicity, let's flatten frames into batch if depth branch is used?
+            # But feature_maps is already reshaped.
+            # Let's skip complex depth handling for sequence for now or reshape temporarily.
+            # Assuming depth_branch handles (B, V, ...).
+            # If frames > 1, we might just use the current frame for depth supervision if data['gt_depth'] is only for current?
+            # Usually gt_depth is for current.
+            
+            # Use current frame features for depth
+            if num_frames > 1:
+                feat_curr = [f[:, 0] for f in feature_maps]
+                depths = self.depth_branch(feat_curr, metas.get("focal"))
+            else:
+                depths = self.depth_branch(feature_maps, metas.get("focal"))
         else:
             depths = None
         if self.use_deformable_func:
-            feature_maps = feature_maps_format(feature_maps)
+            # feature_maps_format usually expects list of (B, V, C, H, W)
+            # If we have (B, T, V, ...), this might break.
+            # We should handle formatting later or adapt it.
+            # Let's leave it as is and see if we need to split first.
+            pass
+            # feature_maps = feature_maps_format(feature_maps) 
+            # ^ This formats to (B, C, H, W) for single cam or something?
+            # SparseDrive `feature_maps_format` (imported from ops) likely does nothing for list input or converts?
+            # Let's check `ops/setup.py`? No, `from ..ops import feature_maps_format`.
+            # Usually this converts (B, V, C, H, W) -> (B, V, H, W, C) or similar for CUDA ops.
+            
         if return_depth:
             return feature_maps, depths
         return feature_maps
@@ -97,7 +133,82 @@ class SparseDrive(BaseDetector):
 
     def forward_train(self, img, **data):
         feature_maps, depths = self.extract_feat(img, True, data)
-        model_outs = self.head(feature_maps, data)
+        
+        feature_maps_next = None
+        projection_mat = data.get("projection_mat")
+        # Extract from DataContainer if needed
+        if hasattr(projection_mat, 'data'):
+            projection_mat = projection_mat.data
+        projection_mat_next = None
+        
+        # Save unformatted features for World Model
+        feature_maps_raw = None
+        feature_maps_next_raw = None
+        
+        if img.dim() == 6:
+            # Split into current and next
+            # feature_maps is list of (B, T, V, C, H, W) with T frames [current, next]
+            feature_maps_curr = [f[:, 0] for f in feature_maps]   # current frame T
+            feature_maps_next = [f[:, 1] for f in feature_maps]   # next frame T+1
+            
+            # Save raw (unformatted) features for World Model
+            # Keep gradients on the WM input (so WM loss can shape encoder/planner),
+            # but detach the target to avoid double-backprop into the future frame.
+            feature_maps_raw = [f for f in feature_maps_curr]            # WM input: T
+            feature_maps_next_raw = [f.detach() for f in feature_maps_next]  # WM target: T+1
+            
+            # Format features for CUDA ops if needed
+            if self.use_deformable_func:
+                feature_maps_curr = feature_maps_format(feature_maps_curr)
+                feature_maps_next = feature_maps_format(feature_maps_next)
+                
+            feature_maps = feature_maps_curr
+            
+            # Get projection_mat for current and next frames from metadata
+            # The dataset stores them separately to avoid shape issues
+            img_metas = data.get('img_metas', None)
+            
+            # img_metas is a list of dicts (one per batch item) after batching
+            if isinstance(img_metas, list) and len(img_metas) > 0:
+                # Get first batch item's metadata
+                first_meta = img_metas[0]
+                if isinstance(first_meta, dict) and 'projection_mat_sequence' in first_meta:
+                    # Found projection_mat_sequence in the first batch item
+                    # Collect from all batch items
+                    proj_seq_batch = []
+                    for meta in img_metas:
+                        if 'projection_mat_sequence' in meta:
+                            proj_seq_batch.append(meta['projection_mat_sequence'])
+                    
+                    if len(proj_seq_batch) > 0 and len(proj_seq_batch[0]) >= 2:
+                        # Stack projection matrices for the batch
+                        # Each proj_seq is [frame_t-1, frame_t]
+                        projection_mat_list = []
+                        projection_mat_next_list = []
+                        
+                        for proj_seq in proj_seq_batch:
+                            projection_mat_list.append(proj_seq[0])  # T
+                            projection_mat_next_list.append(proj_seq[1])  # T+1
+                        
+                        # Stack into (B, V, 4, 4) and move to CUDA
+                        projection_mat = torch.stack(projection_mat_list).cuda()
+                        projection_mat_next = torch.stack(projection_mat_next_list).cuda()
+            # projection_mat is already set correctly from dataset for det/map heads
+        else:
+            # Save raw features even for single frame; keep grads so WM loss can flow
+            feature_maps_raw = [f for f in feature_maps] if isinstance(feature_maps, list) else feature_maps
+            
+            if self.use_deformable_func:
+                feature_maps = feature_maps_format(feature_maps)
+
+        model_outs = self.head(
+            feature_maps, data, 
+            feature_maps_next=feature_maps_next,
+            feature_maps_raw=feature_maps_raw,
+            feature_maps_next_raw=feature_maps_next_raw,
+            projection_mat=projection_mat,
+            projection_mat_next=projection_mat_next
+        )
         output = self.head.loss(model_outs, data)
         if depths is not None and "gt_depth" in data:
             output["loss_dense_depth"] = self.depth_branch.loss(
@@ -112,7 +223,18 @@ class SparseDrive(BaseDetector):
             return self.simple_test(img, **data)
 
     def simple_test(self, img, **data):
+        # Handle case where img has extra temporal dimension from sequence dataset
+        # During evaluation, we only want single frame: (B, V, C, H, W)
+        if img.dim() == 6 and img.shape[1] == 1:
+            # Squeeze out temporal dimension if it's size 1
+            img = img.squeeze(1)
+        
         feature_maps = self.extract_feat(img)
+        
+        # Format feature_maps for deformable aggregation function if needed
+        # This is required during evaluation, same as in forward_train
+        if self.use_deformable_func and DAF_VALID:
+            feature_maps = feature_maps_format(feature_maps)
 
         model_outs = self.head(feature_maps, data)
         results = self.head.post_process(model_outs, data)
